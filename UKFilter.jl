@@ -41,6 +41,9 @@ function UKFilter(x_est, P_est, Q, y_true, R, t, α, β, κ)
     P_pred = sigma_weights[number_of_sigma_points+1]*x_diff*Matrix(x_diff');
     P_xy = sigma_weights[number_of_sigma_points+1]*x_diff*Matrix(y_diff');
     P_yy = sigma_weights[number_of_sigma_points+1]*y_diff*Matrix(y_diff');
+    #P_pred = (W_x .* x_diff) * Matrix(x_diff');
+    #P_xy = (W_x .* x_diff) * Matrix(y_diff');
+    #P_yy = (W_x .* y_diff) * Matrix(y_diff');
 
     x_diff = x_sigma_points[:,2:number_of_sigma_points] - repeat(x_mean_pred,1,number_of_sigma_points-1);
     y_diff = y_sigma_points[:,2:number_of_sigma_points] - repeat(y_mean_pred,1,number_of_sigma_points-1);
@@ -60,11 +63,16 @@ function UKFilter(x_est, P_est, Q, y_true, R, t, α, β, κ)
     #return sqrt_matrix
 end
 
-function getSigmaPoints(x_mean_previous_a, P_previous_a, alpha, beta, kappa)    
+function getSigmaPoints(x_mean_previous_a, P_previous_a, alpha, beta, kappa) 
+    
     n_x_mean_a = size(x_mean_previous_a,1); 
+
     number_of_points = n_x_mean_a*2 + 1;
     
-    lambda = alpha^2*(n_x_mean_a + kappa)-n_x_mean_a; 
+    #lambda = alpha^2*(n_x_mean_a + kappa)-n_x_mean_a; 
+    lambda = 2
+
+    λ = lambda; n = n_x_mean_a
     
     sigma_points = zeros(n_x_mean_a, number_of_points);
     sigma_weights = zeros(1, number_of_points);
@@ -79,7 +87,8 @@ function getSigmaPoints(x_mean_previous_a, P_previous_a, alpha, beta, kappa)
     sigma_weights = [lambda 0.5*ones(1,(number_of_points-1)) 0] / (n_x_mean_a+lambda);
     
     sigma_weights[number_of_points+1] = sigma_weights[1] + (1-(alpha^2)+beta); 
-    
+    #sigma_weights = [λ / (n + λ); fill(1/(2(n + λ)), 2n)]
+
     return sigma_points, sigma_weights, number_of_points
     #return sqrt_matrix
 end
