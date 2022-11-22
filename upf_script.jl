@@ -74,9 +74,9 @@ x̄ = ones(N)
 y_predict = ones(T,N);
 w = ones(T,N)./N;
 
-x_sigma_points = []; y_sigma_points = [];
+𝒳 = []; 𝒴 = [];
 sqrt_matrix = []
-likelihood = 0;likelihood_exponent= 0;prior = 0; proposal = 0;prior_exponent = 0; prior_term=0;
+likelihood = 0; likelihood_exponent= 0; prior = 0; proposal = 0; prior_exponent = 0; prior_term=0;
 
 #=
 vNoise = size(Q,2)
@@ -89,7 +89,7 @@ P_a = [P_predict[1,1] zeros(states, noises); zeros(noises, states) N]
 x_mean_a = [x[1,1]; zeros(noises,1)]
 
 getSigmaPoints(x_mean_a, P_a, α, β, κ)
-sigma_points, sigma_weights, number_of_sigma_points = getSigmaPoints(x_mean_a, P_a, α, β, κ);
+S, sigma_weights, n = getSigmaPoints(x_mean_a, P_a, α, β, κ);
 
 =#
 
@@ -98,7 +98,7 @@ d = MvNormal([0.0], R)
 for t = 2:T-1
     for i = 1:N
         x̄[i], P_predict[t,i] = UKFilter(x[t-1,i], P[t-1,i], Q, yData[t], R, t, α, β, κ)
-        #x_sigma_points, y_sigma_points = UKFilter(x[t-1,i], P[t-1,i], Q, yData[t], R, t, α, β, κ)
+        #𝒳, 𝒴 = UKFilter(x[t-1,i], P[t-1,i], Q, yData[t], R, t, α, β, κ)
         x̂[i] = rand(Normal(x̄[i], sqrt(P_predict[t,i])))
     end
 
@@ -108,12 +108,19 @@ for t = 2:T-1
 
         likelihood_exponent = -0.5 * inv(σ) * ((yData[t] - y_predict[t, i])^2);
         likelihood = 1e-50 + inv(sqrt(σ)) * exp(likelihood_exponent);
-
         # Calculate prior
+        #=
         prior_exponent = -gamma2*(x̂[i]) - x[t-1, i];
         prior_term = x̂[i] - x[t-1, i]^(gamma1);
         prior = prior_term * exp(prior_exponent);
+        # prior = (x_term^(k-1)*exp(-x_term/theta))/((theta^k)*gamma(k));
+        =#
+        prior_exponent = -gamma2*abs(x̂[i] - x[t-1, i]);
+        prior_term = (x̂[i] - x[t-1, i])^(gamma1-1);
+        prior = prior_term * exp(prior_exponent);
+        prior = prior / (2*(gamma2^gamma1))
 
+        # prior = (x_term^(k-1)*exp(-x_term/theta))/((theta^k)*gamma(k));
         # Calculate proposal
         proposal_term = inv(sqrt(P_predict[t, i]));
         proposal_exponent = -0.5 * inv(P_predict[t, i]) * ( x̂[i]-x̄[i] )^2;
@@ -121,7 +128,8 @@ for t = 2:T-1
         
         # Assign a value to the weight
         w[t, i] = likelihood * prior / proposal;
-        w[t, i] = logpdf(d,[yData[t] - y_predict[t, i]])
+        #w[t, i] = likelihood / proposal
+        #w[t, i] = logpdf(d,[yData[t] - y_predict[t, i]])
         #w[t, i] = 0.001*rand()
     end
     ## Normalize weights
@@ -162,35 +170,33 @@ noises = vNoise + wNoise
 P_a = [P_predict[9,1] zeros(states, noises); zeros(noises, states) N]
 x_mean_a = [x[10,1]; zeros(noises,1)]
 
-getSigmaPoints(x_mean_a, P_a, α, β, κ)
-sigma_points, sigma_weights, number_of_sigma_points = getSigmaPoints(x_mean_a, P_a, α, β, κ);
-
-W_x = repeat(sigma_weights[:,2:number_of_sigma_points],states,1);
-W_y = repeat(sigma_weights[:,2:number_of_sigma_points],observations,1);
-
-x_sigma_points = f(sigma_points[1:states,:], sigma_points[states+1:states+vNoise,:], 2);
-y_sigma_points = h(x_sigma_points, sigma_points[states+vNoise+1:states+noises,:], 2);
+S, sigma_weights, n = getSigmaPoints(x_mean_a, P_a, α, β, κ);
 
 ##
-x_mean_pred = sum(W_x .* (x_sigma_points[:,2:number_of_sigma_points] 
-- repeat(x_sigma_points[:,1],1,number_of_sigma_points-1)),dims = 2);
-y_mean_pred = sum(W_y .* (y_sigma_points[:,2:number_of_sigma_points] 
-- repeat(y_sigma_points[:,1],1,number_of_sigma_points-1)),dims = 2);
+W_x = repeat(sigma_weights[:,2:n],states,1);
+W_y = repeat(sigma_weights[:,2:n],observations,1);
 
-x_mean_pred = x_mean_pred + x_sigma_points[:,1];
-y_mean_pred = y_mean_pred + y_sigma_points[:,1];
-
-x_diff = x_sigma_points[:,1] - x_mean_pred;
-y_diff = y_sigma_points[:,1] - y_mean_pred;
+𝒳 = f(S[1:states,:], S[states+1:states+vNoise,:], 2);
+𝒴 = h(𝒳, S[states+vNoise+1:states+noises,:], 2);
 
 ##
-P_pred = sigma_weights[number_of_sigma_points+1]*x_diff*Matrix(x_diff');
-P_xy = sigma_weights[number_of_sigma_points+1]*x_diff*Matrix(y_diff');
-P_yy = sigma_weights[number_of_sigma_points+1]*y_diff*Matrix(y_diff');
+x̄ₜ₋₁ = sum(W_x .* (𝒳[:,2:n] - repeat(𝒳[:,1],1,n-1)),dims = 2);
+ȳₜ₋₁ = sum(W_y .* (𝒴[:,2:n] - repeat(𝒴[:,1],1,n-1)),dims = 2);
+
+x̄ₜ₋₁ = x̄ₜ₋₁ + 𝒳[:,1];
+ȳₜ₋₁ = ȳₜ₋₁ + 𝒴[:,1];
+
+x_diff = 𝒳[:,1] - x̄ₜ₋₁;
+y_diff = 𝒴[:,1] - ȳₜ₋₁;
 
 ##
-x_diff = x_sigma_points[:,2:number_of_sigma_points] - repeat(x_mean_pred,1,number_of_sigma_points-1);
-y_diff = y_sigma_points[:,2:number_of_sigma_points] - repeat(y_mean_pred,1,number_of_sigma_points-1);
+P_pred = sigma_weights[n+1]*x_diff*Matrix(x_diff');
+P_xy = sigma_weights[n+1]*x_diff*Matrix(y_diff');
+P_yy = sigma_weights[n+1]*y_diff*Matrix(y_diff');
+
+##
+x_diff = 𝒳[:,2:n] - repeat(x̄ₜ₋₁,1,n-1);
+y_diff = 𝒴[:,2:n] - repeat(ȳₜ₋₁,1,n-1);
 
 ##
 P_pred = P_pred + (W_x .* x_diff) * Matrix(x_diff');
@@ -202,16 +208,12 @@ P_xy = P_xy .+ x_diff * Matrix((W_y .* y_diff)');
 P_pred
 
 ##
-my_diff = x_sigma_points - repeat(x_mean_pred,1,number_of_sigma_points)
+my_diff = 𝒳 - repeat(x̄ₜ₋₁,1,n)
 ws = sigma_weights[1:7]
-my_P_pred = sum(w*(s - x_mean_pred[1])*(s - x_mean_pred[1]) for (w,s) in zip(ws, x_sigma_points))
+my_P_pred = sum(w*(s - x̄ₜ₋₁[1])*(s - x̄ₜ₋₁[1]) for (w,s) in zip(ws, 𝒳))
+
+
 
 ##
-#=
-d = Gamma(3, 2)
-
-i = 1; t = 2
-my_x = x̂[i] - x[t-1, i]
-
-pdf(d, my_x)
-=#
+λ = 2
+x̄p, Pp, Sp, Sp′ = unscented_transform(x_mean_a, P_a, s -> f(s[1:states,:], s[states+1:states+vNoise,:], t), λ, ws)

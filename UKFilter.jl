@@ -15,38 +15,43 @@ function UKFilter(x_est, P_est, Q, y_true, R, t, α, β, κ)
         x_mean_a = x_est
     end
     #return P_a, x_mean_a
+    λ = 2
+    n = length(x_est)
+    weights = [λ / (n + λ); fill(1/(2(n + λ)), 2n)]
 
+    #μp, Σp, Sp, Sp′ = unscented_transform(μb, Σb, s->fT(s,a), λ, weights)
+    x̄p, Pp, Sp, Sp′ = unscented_transform(x_mean_a, P_a, s -> f(s[1:states,:], s[states+1:states+vNoise,:], t), λ, weights)
+    
     # Calculate the sigma points and the sigma_weights
-    sigma_points, sigma_weights, number_of_sigma_points = getSigmaPoints(x_mean_a, P_a, α, β, κ);
+    S, ws, n = getSigmaPoints(x_mean_a, P_a, α, β, κ);
 
-    W_x = repeat(sigma_weights[:,2:number_of_sigma_points],states,1);
-    W_y = repeat(sigma_weights[:,2:number_of_sigma_points],observations,1);
+    W_x = repeat(ws[:,2:n],states,1);
+    W_y = repeat(ws[:,2:n],observations,1);
 
-    x_sigma_points = f(sigma_points[1:states,:], sigma_points[states+1:states+vNoise,:], t);
-    y_sigma_points = h(x_sigma_points, sigma_points[states+vNoise+1:states+noises,:], t);
-
+    𝒳 = f(S[1:states,:], S[states+1:states+vNoise,:], t);
+    𝒴 = h(𝒳, S[states+vNoise+1:states+noises,:], t);
 
     ############################################################################
-    x_mean_pred = sum(W_x .* (x_sigma_points[:,2:number_of_sigma_points] 
-        - repeat(x_sigma_points[:,1],1,number_of_sigma_points-1)),dims = 2);
-    y_mean_pred = sum(W_y .* (y_sigma_points[:,2:number_of_sigma_points] 
-        - repeat(y_sigma_points[:,1],1,number_of_sigma_points-1)),dims = 2);
+    x̄ₜ₋₁ = sum(W_x .* (𝒳[:,2:n] 
+        - repeat(𝒳[:,1],1,n-1)),dims = 2);
+    ȳₜ₋₁ = sum(W_y .* (𝒴[:,2:n] 
+        - repeat(𝒴[:,1],1,n-1)),dims = 2);
 
-    x_mean_pred = x_mean_pred + x_sigma_points[:,1];
-    y_mean_pred = y_mean_pred + y_sigma_points[:,1];
+    x̄ₜ₋₁ = x̄ₜ₋₁ + 𝒳[:,1];
+    ȳₜ₋₁ = ȳₜ₋₁ + 𝒴[:,1];
 
-    x_diff = x_sigma_points[:,1] - x_mean_pred;
-    y_diff = y_sigma_points[:,1] - y_mean_pred;
+    x_diff = 𝒳[:,1] - x̄ₜ₋₁;
+    y_diff = 𝒴[:,1] - ȳₜ₋₁;
 
-    P_pred = sigma_weights[number_of_sigma_points+1]*x_diff*Matrix(x_diff');
-    P_xy = sigma_weights[number_of_sigma_points+1]*x_diff*Matrix(y_diff');
-    P_yy = sigma_weights[number_of_sigma_points+1]*y_diff*Matrix(y_diff');
+    P_pred = ws[n+1]*x_diff*Matrix(x_diff');
+    P_xy = ws[n+1]*x_diff*Matrix(y_diff');
+    P_yy = ws[n+1]*y_diff*Matrix(y_diff');
     #P_pred = (W_x .* x_diff) * Matrix(x_diff');
     #P_xy = (W_x .* x_diff) * Matrix(y_diff');
     #P_yy = (W_x .* y_diff) * Matrix(y_diff');
 
-    x_diff = x_sigma_points[:,2:number_of_sigma_points] - repeat(x_mean_pred,1,number_of_sigma_points-1);
-    y_diff = y_sigma_points[:,2:number_of_sigma_points] - repeat(y_mean_pred,1,number_of_sigma_points-1);
+    x_diff = 𝒳[:,2:n] - repeat(x̄ₜ₋₁,1,n-1);
+    y_diff = 𝒴[:,2:n] - repeat(ȳₜ₋₁,1,n-1);
 
     P_pred = P_pred + (W_x .* x_diff) * Matrix(x_diff');
     P_yy = P_yy .+ (W_y .* y_diff) * Matrix(y_diff');
@@ -54,45 +59,58 @@ function UKFilter(x_est, P_est, Q, y_true, R, t, α, β, κ)
 
     K = P_xy / P_yy;
 
-    x_est = x_mean_pred + K*( y_true - y_mean_pred[1]);
+    x_est = x̄ₜ₋₁ + K*( y_true - ȳₜ₋₁[1]);
 
     P_est = P_pred - K*P_yy*Matrix(K');
 
-    #return sigma_points, sigma_weights, number_of_sigma_points
     return x_est[1], P_est[1]
-    #return sqrt_matrix
 end
 
 function getSigmaPoints(x_mean_previous_a, P_previous_a, alpha, beta, kappa) 
     
     n_x_mean_a = size(x_mean_previous_a,1); 
 
-    number_of_points = n_x_mean_a*2 + 1;
+    n = n_x_mean_a*2 + 1;
     
     #lambda = alpha^2*(n_x_mean_a + kappa)-n_x_mean_a; 
     lambda = 2
 
-    λ = lambda; n = n_x_mean_a
+    λ = lambda; #n = n_x_mean_a
     
-    sigma_points = zeros(n_x_mean_a, number_of_points);
-    sigma_weights = zeros(1, number_of_points);
+    S = zeros(n_x_mean_a, n);
+    ws = zeros(1, n);
     
     sqrt_matrix = Matrix(Matrix(sparse(cholesky((n_x_mean_a+lambda)*P_previous_a).U))');
     # Define the sigma_points columns
-    sigma_points = [zeros(size(P_previous_a,1),1) -sqrt_matrix sqrt_matrix];
+    S = [zeros(size(P_previous_a,1),1) -sqrt_matrix sqrt_matrix];
     # Add mean to the rows
-    sigma_points = sigma_points + repeat(x_mean_previous_a, 1, number_of_points);
+    S = S + repeat(x_mean_previous_a, 1, n);
     
     # Define the sigma_weights columns 
-    sigma_weights = [lambda 0.5*ones(1,(number_of_points-1)) 0] / (n_x_mean_a+lambda);
+    ws = [lambda 0.5*ones(1,(n-1)) 0] / (n_x_mean_a+lambda);
     
-    sigma_weights[number_of_points+1] = sigma_weights[1] + (1-(alpha^2)+beta); 
-    #sigma_weights = [λ / (n + λ); fill(1/(2(n + λ)), 2n)]
+    ws[n+1] = ws[1] + (1-(alpha^2)+beta); 
+    #ws = [λ / (n + λ); fill(1/(2(n + λ)), 2n)]
 
-    return sigma_points, sigma_weights, number_of_points
+    return S, ws, n
     #return sqrt_matrix
 end
     
+function unscented_transform(x̄, P, f, λ, ws)
+    n = length(x̄)
+    Δ = cholesky((n + λ) * P).L
+    S = [x̄]
+    for i in 1:n
+        push!(S, x̄ + Δ[:, i])
+        push!(S, x̄ - Δ[:, i])
+    end
+    S′ = f.(S)
+    x̄′ = sum(w*s for (w,s) in zip(ws, S′))
+    P′ = sum(w*(s - x̄′)*(s - x̄′) for (w,s) in zip(ws, S′))
+
+    return (x̄′, P′, S, S′)
+end
+
 
 function f(x_previous, v_previous, t_previous)
     x_current = 0.0
