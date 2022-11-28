@@ -21,7 +21,10 @@ function UKFilter(x_est, P_est, Q, y_true, R, t, α, β, κ)
 
     #μp, Σp, Sp, Sp′ = unscented_transform(μb, Σb, s->fT(s,a), λ, weights)
     x̄p, Pp, Sp, Sp′ = unscented_transform(x_mean_a, P_a, s -> f(s[1:states,:], s[states+1:states+vNoise,:], t), λ, weights)
-    
+    Pp = Pp + [Q]
+    x̄o, Po, So, So′ = unscented_transform(x̄p, Pp, s -> my_h(s[1:states,:], t), λ, weights)
+
+    #h(𝒳, S[states+vNoise+1:states+noises,:], t)
     # Calculate the sigma points and the sigma_weights
     S, ws, n = getSigmaPoints(x_mean_a, P_a, α, β, κ);
 
@@ -106,7 +109,7 @@ function unscented_transform(x̄, P, f, λ, ws)
     end
     S′ = f.(S)
     x̄′ = sum(w*s for (w,s) in zip(ws, S′))
-    P′ = sum(w*(s - x̄′)*(s - x̄′) for (w,s) in zip(ws, S′))
+    P′ = sum(w*(s - x̄′)*(s - x̄′)' for (w,s) in zip(ws, S′))
 
     return (x̄′, P′, S, S′)
 end
@@ -135,6 +138,31 @@ function h( x_value, n, t)
     return y_predict
 end
 
+function my_h( x_value, t)
+    y_predict = 0.0
+    if t <= 30
+        y_predict = 0.2 * x_value[1].^(2);
+    else
+        y_predict = 0.5 * x_value[1] .- 2;
+    end
+    return y_predict
+end
+
+function my_f(x_previous, t_previous)
+    x_current = 0.0
+    omega = 4*exp(1)-2;
+    phi1 = 0.5;
+    
+    # Define helping parameters
+    n_part = size(x_previous,2);
+    sin_term = sin(omega*pi*t_previous);
+    
+    #x_current = ones(1,n_part) + repeat([sin_term],1,n_part) + phi1.*x_previous
+    x_current = 1 + sin_term + phi1.*x_previous[1]
+    return [x_current; 0.0; 0.0]
+end
+
+
 function predictY( x_value, t)
     y_predict = 0.0
     if t <= 30
@@ -145,4 +173,17 @@ function predictY( x_value, t)
     return y_predict
 end
     
-    
+
+##
+#=
+function safe_cholesky(A)
+    if dim(A) > 1
+        Δ = cholesky(A).L
+    else
+        Δ = sqrt(A)
+    end
+    return Δ
+end
+=#
+
+safe_cholesky(A) = dim(A) > 1 ? Δ = cholesky(A).L : Δ = sqrt(A)
