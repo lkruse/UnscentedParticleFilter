@@ -1,53 +1,46 @@
+#=
+Author: 
+    Liam Kruse
+Email: 
+    lkruse@stanford.edu
+simulation.jl:
+    A script for running a state estimation task with the Unscented Particle
+    Filter, as presented in 
+    "Van Der Merwe, R., Doucet, A., De Freitas, N., & Wan, E. (2000). The 
+    Unscented Particle Filter. Advances in Neural Information Processing Systems, 13."
+=#
+
 ##
+#*******************************************************************************
+# PACKAGES AND SETUP
+#*******************************************************************************
 using Distributions
 using LinearAlgebra
 using PGFPlots
 using SparseArrays
 using StatsBase
-include("UKFilter.jl")
+
+include("ukf.jl")
 
 ##
-function generateData(T, x₀)
-    ϕ₁ = 0.5
-    ϕ₂ = 0.2
-    ϕ₃ = 0.5
-    
-    xData =[x₀]; yData = []; 
-
+#*******************************************************************************
+# FUNCTIONS
+#*******************************************************************************
+function simulate(T, x₀)    
+    states =[x₀]; observations = []; 
+    sigma = 1; Q = 1
+    R = 0.00001^2
     for t = 2:T
-        push!(xData, generateX(t, xData[t-1]))
-        push!(yData, generateY(t, xData[t-1]))
+        push!(states, my_f(states[t-1], t) + rand(Normal(0, sigma)))
+        push!(observations, my_h(states[t-1], t) + rand(Normal(0, 0.00001)))
     end
-    return xData, yData
+    return states, observations
 end
-
-α  = 3
-θ  = 2
-
-sigma = 2
-
-function generateX(t, xₜ)
-    ϕ₁ = 0.5
-    ω = 4*exp(1) - 2
-    return 1 + sin(ω*π*t) + ϕ₁*xₜ + rand(Normal(0, sigma))#+ rand(Gamma(α,θ))
-end
-
-function generateY(t, xₜ)
-    ϕ₂ = 0.2
-    ϕ₃ = 0.5
-    σ = 1e-5
-    if t <= 30
-        return ϕ₂*xₜ^2 + rand(Normal(0, σ))
-    else
-        return ϕ₃*xₜ - 2 + rand(Normal(0, σ))
-    end
-end
-
 
 ##
 σ       = 1e-5
 T       = 60
-P₀      = α/(θ^2)
+P₀      = 0.75
 N       = 200
 Q       = 2*(0.75)
 R       = 0.1
@@ -61,7 +54,7 @@ R       = 0.1
 
 x₀ = 1.0
 
-xData, yData = generateData(T, x₀)
+xData, yData = simulate(T, x₀)
 
 x = ones(T,N);
 P = P₀ * ones(T,N);
@@ -80,23 +73,9 @@ w = ones(T,N)./N;
 sqrt_matrix = []
 likelihood = 0; likelihood_exponent= 0; prior = 0; proposal = 0; prior_exponent = 0; prior_term=0;
 
-#=
-vNoise = size(Q,2)
-wNoise = size(R,2)
-states = size(x[1,1], 1)
-N = [Q zeros(vNoise, wNoise); zeros(wNoise, vNoise) R]
-noises = vNoise + wNoise
 
-P_a = [P_predict[1,1] zeros(states, noises); zeros(noises, states) N]
-x_mean_a = [x[1,1]; zeros(noises,1)]
-
-getSigmaPoints(x_mean_a, P_a, α_ukf, β, κ)
-S, sigma_weights, n = getSigmaPoints(x_mean_a, P_a, α_ukf, β, κ);
-
-=#
-
-states = 1#size(x_est, 1)
-observations = 1#size(y_true, 1)
+states = 1
+observations = 1
 vNoise = size(Q,2)
 wNoise = size(R,2)
 
@@ -107,9 +86,11 @@ d = MvNormal([0.0], R)
 for t = 2:T-1
     for i = 1:N
             
-        myN = [Q zeros(vNoise, wNoise); zeros(wNoise, vNoise) R]
-        P_a = [P[t-1,i] zeros(states, noises); zeros(noises, states) myN]
-        x_mean_a = [x[t-1,i]; zeros(noises,1)]
+        #myN = [Q zeros(vNoise, wNoise); zeros(wNoise, vNoise) R]
+        #P_a = [P[t-1,i] zeros(states, noises); zeros(noises, states) myN]
+        P_a = P[t-1,i]
+        #x_mean_a = [x[t-1,i]; zeros(noises,1)]
+        x_mean_a = x[t-1,i]
 
         #return P_a, x_mean_a
         λ = 2
@@ -118,7 +99,7 @@ for t = 2:T-1
 
         x̄p, Pp, Sp, Sp′ = unscented_transform(x_mean_a, P_a, s -> my_f(s, t), λ, weights)
 
-        Pp[diagind(Pp)] = [Pp[1] + Q; Q; R]
+        Pp = Pp + Q
         x̄o, Po, So, So′ = unscented_transform(x̄p, Pp, s -> my_h(s, t), λ, weights)
 
         Po = Po + R
@@ -129,11 +110,14 @@ for t = 2:T-1
         #x̄ = x̄p + K*(o - x̄o)
         #P = Pp - K*Po*K'
         o = yData[t]
-        x_temp = x̄p + K*(o - x̄o)
-        x̄[i] = x_temp[1]
-        P_temp = Pp - K*Po*K'
+        #x_temp = x̄p + K*(o - x̄o)
+        #x̄[i] = x_temp[1]
+        x̄[i] = x̄p + K*(o - x̄o)
+        
+        #P_temp = Pp - K*Po*K'
 
-        P_predict[t,i] = P_temp[1]
+        #P_predict[t,i] = P_temp[1]
+        P_predict[t,i] = Pp - K*Po*K'
 
         #=
         x̄[i], P_predict[t,i] = UKFilter(x[t-1,i], P[t-1,i], Q, yData[t], R, t, α_ukf, β, κ)
@@ -143,7 +127,7 @@ for t = 2:T-1
 
     # Evaluate importance weights up to a normalizing constant
     for i = 1:N
-        y_predict[t, i] = predictY(x̂[i], t);
+        y_predict[t, i] = my_h(x̂[i], t);
 
         likelihood_exponent = -0.5 * inv(σ) * ((yData[t] - y_predict[t, i])^2);
         likelihood = 1e-50 + inv(sqrt(σ)) * exp(likelihood_exponent);
@@ -159,6 +143,7 @@ for t = 2:T-1
         prior_term = x̂[i] - x[t-1, i]^(α-1);
         prior = prior_term * exp(prior_exponent);
         =#
+        #sigma = 1
         prior_exponent = -0.5 * inv(sigma) * ((x̂[i] - x[t-1, i])^2);
         prior = inv(sqrt(sigma)) * exp(prior_exponent);
 
@@ -203,66 +188,6 @@ title="UPF State Estimation",
 save("upf.pdf", p)
 
 ##
-vNoise = size(Q,2)
-wNoise = size(R,2)
-states = size(x[10,1], 1)
-observations = size(yData[10],1)
-
-N = [Q zeros(vNoise, wNoise); zeros(wNoise, vNoise) R]
-noises = vNoise + wNoise
-
-P_a = [P_predict[9,1] zeros(states, noises); zeros(noises, states) N]
-x_mean_a = [x[10,1]; zeros(noises,1)]
-
-S, sigma_weights, n = getSigmaPoints(x_mean_a, P_a, α, β, κ);
-
-##
-W_x = repeat(sigma_weights[:,2:n],states,1);
-W_y = repeat(sigma_weights[:,2:n],observations,1);
-
-𝒳 = f(S[1:states,:], S[states+1:states+vNoise,:], 2);
-𝒴 = h(𝒳, S[states+vNoise+1:states+noises,:], 2);
-
-##
-x̄ₜ₋₁ = sum(W_x .* (𝒳[:,2:n] - repeat(𝒳[:,1],1,n-1)),dims = 2);
-ȳₜ₋₁ = sum(W_y .* (𝒴[:,2:n] - repeat(𝒴[:,1],1,n-1)),dims = 2);
-
-x̄ₜ₋₁ = x̄ₜ₋₁ + 𝒳[:,1];
-ȳₜ₋₁ = ȳₜ₋₁ + 𝒴[:,1];
-
-x_diff = 𝒳[:,1] - x̄ₜ₋₁;
-y_diff = 𝒴[:,1] - ȳₜ₋₁;
-
-##
-P_pred = sigma_weights[n+1]*x_diff*Matrix(x_diff');
-P_xy = sigma_weights[n+1]*x_diff*Matrix(y_diff');
-P_yy = sigma_weights[n+1]*y_diff*Matrix(y_diff');
-
-##
-x_diff = 𝒳[:,2:n] - repeat(x̄ₜ₋₁,1,n-1);
-y_diff = 𝒴[:,2:n] - repeat(ȳₜ₋₁,1,n-1);
-
-##
-P_pred = P_pred + (W_x .* x_diff) * Matrix(x_diff');
-P_yy = P_yy .+ (W_y .* y_diff) * Matrix(y_diff');
-P_xy = P_xy .+ x_diff * Matrix((W_y .* y_diff)');
-
-K = P_xy / P_yy;
-
-x_est = x̄ₜ₋₁ + K*( yData[10] - ȳₜ₋₁[1]);
-
-P_est = P_pred - K*P_yy*Matrix(K');
-
-##
-P_pred
-
-##
-my_diff = 𝒳 - repeat(x̄ₜ₋₁,1,n)
-ws = sigma_weights[1:7]
-my_P_pred = sum(w*(s - x̄ₜ₋₁[1])*(s - x̄ₜ₋₁[1])' for (w,s) in zip(ws, 𝒳))
-
-
-##
 P₀      = α/(θ^2)
 N       = 200
 Q       = 2*(0.75)
@@ -299,16 +224,3 @@ K = Ppo / Po
 
 x̄ = x̄p + K*(o - x̄o)
 P = Pp - K*Po*K'
-
-function f(x_previous, v_previous, t_previous)
-    x_current = 0.0
-    omega = 4*exp(1)-2;
-    phi1 = 0.5;
-    
-    # Define helping parameters
-    n_part = size(x_previous,2);
-    sin_term = sin(omega*pi*t_previous);
-    
-    x_current = ones(1,n_part) + repeat([sin_term],1,n_part) + phi1.*x_previous + v_previous;
-    return x_current
-end
