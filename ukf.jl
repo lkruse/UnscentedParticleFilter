@@ -1,3 +1,11 @@
+struct UnscentedParticleFilter
+    λ
+    Q
+    R
+    f
+    h
+end
+
 function unscented_transform(x̄, P, f, λ, ws)
     n = length(x̄)
     S = [x̄]
@@ -21,23 +29,19 @@ function unscented_transform(x̄, P, f, λ, ws)
     return (x̄′, P′, S, S′)
 end
 
-function my_f(x_previous, t)
-    ϕ₁ = 0.5
-    ω = 4*exp(1) - 2
-    
-    # Define helping parameters
-    n_part = size(x_previous,2);
+function update(upf, x, P, y, t)
+    λ, Q, R, f, h = upf.λ, upf.Q, upf.R, upf.f, upf.h
+    n = length(x)
+    ws = [λ / (n + λ); fill(1/(2(n + λ)), 2n)]
+    x̄p, Pp, 𝒳, 𝒳′ = unscented_transform(x, P, s -> f(s, t), λ, ws)
+    Pp = Pp + Q
+    ȳ, Pyy, 𝒴, 𝒴′ = unscented_transform(x̄p, Pp, s -> h(s, t), λ, ws)
+    Pyy = Pyy + R
+    Pxy = sum(w*(s - x̄p)*(s′ - ȳ)' for (w,s,s′) in zip(ws, 𝒴, 𝒴′))
+    K = Pxy / Pyy
+    x̄ = x̄p + K*(y - ȳ)
+    P̂ = Pp - K*Pyy*K'
 
-    x_current = 1 + sin(ω*π*t) + ϕ₁*x_previous
-    return x_current
+    return (x̄, P̂)
 end
 
-function my_h( x_value, t)
-    y_predict = 0.0
-    if t <= 30
-        y_predict = 0.2 * x_value[1].^(2);
-    else
-        y_predict = 0.5 * x_value[1] .- 2;
-    end
-    return y_predict
-end
