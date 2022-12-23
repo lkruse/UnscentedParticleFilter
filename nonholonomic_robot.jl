@@ -3,9 +3,9 @@ Author:
     Liam Kruse
 Email: 
     lkruse@stanford.edu
-simulation.jl:
-    A script for running a state estimation task with the Unscented Particle
-    Filter, as presented in 
+nonholonomic_robot.jl:
+    A script for estimating the position of a nonholonomic robot with the 
+    Unscented Particle Filter, as presented in 
     "Van Der Merwe, R., Doucet, A., De Freitas, N., & Wan, E. (2000). The 
     Unscented Particle Filter. Advances in Neural Information Processing Systems, 13."
 =#
@@ -17,44 +17,37 @@ simulation.jl:
 using Distributions
 using LinearAlgebra
 using PGFPlots
-using SparseArrays
+using Random
 using StatsBase
 
-include("ukf.jl")
+include("upf.jl")
 
 ##
 #*******************************************************************************
 # FUNCTIONS
 #*******************************************************************************
 # Transition model
-function f(x, t)
-    ϕ1 = 0.5
-    ω = 4*exp(1) - 2
-    x′ = 1 + sin(ω*π*t) + ϕ1*x
-
-    return x′
+function f(s, u)
+    v, ϕ = u
+    Δt = 0.1; L= 2.8
+    s′ = s + Δt*([v*cos(s[3]); v*sin(s[3]); v*tan(ϕ)/L])
+    return s′
 end
 
 # Measurement model
-function h(x, t)
-    ϕ2 = 0.2; ϕ3 = 0.5
-    if t <= 30
-        y = ϕ2*x^2;
-    else
-        y = ϕ3*x - 2;
-    end
-
-    return y
+function h(s)
+    y = [s[1], s[2]]
 end
 
 # Function to run a simulation starting at state x0 and using the transition 
 # model f and measurement model h specified by the filter
-function simulate(upf, T, x0)   
+function simulate(upf, T, x0, actions)   
     Q, R, f, h = upf.Q, upf.R, upf.f, upf.h
-    states =[x0]; observations = [NaN]
+    states =[x0]; observations = [[NaN, NaN]]
+    n = length(x0)
     for t = 2:T
-        push!(states, f(states[t-1], t) + rand(Normal(0.0, sqrt(Q))))
-        push!(observations, h(states[t], t) + rand(Normal(0.0, sqrt(R))))
+        push!(states, f(states[t-1], actions[t]) + rand(MvNormal(zeros(n), Q)))
+        push!(observations, h(states[t]) + rand(MvNormal(zeros(2), R)))
     end
     return states, observations
 end
@@ -63,51 +56,62 @@ end
 #*******************************************************************************
 # SIMULATION SETUP
 #*******************************************************************************
-T   = 60            # Simulation length
-N   = 200           # Number of particles
+T   = 30            # Simulation length
+N   = 50           # Number of particles
+Δt = 0.1
+times = 0:Δt:T
+action_sequence = [[6.0, 0.005*sin(0.5*t)] for t in times]
 
-upf = UnscentedParticleFilter(2, 1.0, 0.001, f, h) # Unscented particle filter
+x0 = 0.0            # Initial value for x-coordinate [m]
+y0 = 0.0            # Initial value for y-coordinate [m]
+θ0 = 0.0            # Initial value for heading angle [rad]
 
-x0  = 1.0
-x   = fill(x0, N)   # Initial particle set values
-P0  = 0.75
-P   = P0*ones(N)    # Initial particle set covariances
+# Noise statistics
+Q = Δt*0.05*Matrix{Float64}(I,3,3)
+R = 0.1*Matrix{Float64}(I,2,2)
 
-x̂ = ones(N)         # Data structure to hold sampled particles
-x̄ = ones(N)         # Data structure to hold posterior means
-P̂ = ones(N)         # Data structure to hold posterior covariances
+upf = UnscentedParticleFilter(2, Q, R, f, h) # Unscented particle filter
+
+s0  = [x0; y0; θ0]
+x   = fill(s0, N)   # Initial particle set values
+P0  = 0.01*Matrix{Float64}(I,3,3)
+P   = fill(P0, N)    # Initial particle set covariances
+
+x̂ = fill(s0, N)     # Data structure to hold sampled particles
+x̄ = fill(s0, N)     # Data structure to hold posterior means
+P̂ = fill(P0, N)     # Data structure to hold posterior covariances
 
 μ = [mean(x)]       # Vector to hold mean data for plotting
 Σ = [cov(x)]        # Vector to hold covariance data for plotting
 
 # Generate simulated data
-states, observations = simulate(upf, T, x0)
+states, observations = simulate(upf, lastindex(times), s0, action_sequence)
 
 ##
 #*******************************************************************************
 # FILTERING
 #*******************************************************************************
-for t = 2:T
+for t = 2:lastindex(times)
     Q, R = upf.Q, upf.R # Noise statistics
     y = observations[t] # Latest observation     
     for i = 1:N
         # Perform a belief update
-        x̄[i], P̂[i] = update(upf, x[i], P[i], y, t)
+        x̄[i], P̂[i] = my_update(upf, x[i], P[i], y, action_sequence[t])
         # Draw a new particle from the proposal distribution
-        x̂[i] = rand(Normal(x̄[i], sqrt(P̂[i])))
+        x̂[i] = rand(MvNormal(x̄[i], Hermitian(P̂[i])))
     end
 
     # Evaluate importance weights up to a normalizing constant
     w = ones(N)/N;
     for i = 1:N
-        ŷ = h(x̂[i], t)  # Predicted measurement
+        ŷ = h(x̂[i])  # Predicted measurement
 
         # Compute observation likelihood
-        likelihood = inv(sqrt(2π*R)) * exp(-0.5*inv(R)*((y - ŷ)^2))
+        likelihood = pdf(MvNormal(ŷ, R), y)
         # Calculate prior
-        prior = inv(sqrt(2π*Q))*exp(-0.5*inv(Q)*((x̂[i] - x[i])^2))
+        prior = pdf(MvNormal(x[i], Q), x̂[i])
         # Calculate proposal
-        proposal = inv(sqrt(2π*P̂[i]))*exp(-0.5*inv(P̂[i])*(x̂[i] - x̄[i])^2)
+        proposal = pdf(MvNormal(x̄[i], Hermitian(P̂[i])), x̂[i])
         
         # Compute the particle weight
         w[i] = likelihood * prior / proposal
@@ -128,14 +132,17 @@ end
 #*******************************************************************************
 # PLOTTING
 #*******************************************************************************
+x_data = [s[1] for s in states]; y_data = [s[2] for s in states]
+μ_x = [mu[1] for mu in μ]; μ_y = [mu[2] for mu in μ]
+
 p = Axis([
-    Plots.Linear(1:T, μ, legendentry="UPF Estimate",
+    Plots.Linear(μ_x, μ_y, legendentry="UPF Estimate",
         style="blue, thick, mark options={scale=0.6, fill=blue, solid}"), 
-    Plots.Linear(1:T, states, legendentry="True State Value",
-        style="black, dashed, thick, mark options={scale=0.6,fill=black, solid}"),
+    Plots.Linear(x_data, y_data, legendentry="True State Value",
+        style="black, dashed, thick, no marks"),
 ],
 style="enlarge x limits=false,grid=both",
 ylabel="y", xlabel="time",
 title="UPF State Estimation",
         legendPos = "north east",legendStyle="nodes = {scale = 0.75}")
-save("upf.pdf", p)
+save("nonholonomic_robot.pdf", p)
